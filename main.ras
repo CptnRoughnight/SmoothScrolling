@@ -1,0 +1,272 @@
+/* To execute this program, compile and run the build.bat 
+	It'll create a D81 Image to import in the emulator or
+	you can send it to your Mega65 (nexys doesn't work) and 
+	run the first file (main.prg)
+	
+*/
+
+
+program SmoothScroll;
+@use "rsengine/fileio"
+@use "rsengine/DMA"
+@use "rsengine/mega65"
+
+
+var @donotremove BOTTOM_BORDER
+	@donotremove LEFT_BORDER
+	@donotremove TOP_BORDER
+	BOTTOM_BORDER : integer = 496;
+	LEFT_BORDER : integer = 80;
+	TOP_BORDER : integer = 96;
+	
+	const SCREEN_COLS : byte = 21;
+	const NUM_ROWS : byte = 26;
+	
+	const MAP_WIDTH : byte = 60;
+	const MAP_HEIGHT : byte = 52;
+	const MAP_ATTRIB_START : integer = 6240;
+	
+	MapRowOffset : array[MAP_HEIGHT] of integer;
+	
+	
+procedure LoadAssets();
+begin
+	// Load Palette to $4000 - can be overwritten 
+	fileio_lfaddr := $4000;
+	fileio_lfbank := 0;
+	fileio_lfnamesize := 7;
+   fileio_lfname := "PAL.BIN";
+   fileio::LoadFile();
+   
+   // Load Tile Data to $40000 - tiles start at 4096
+	fileio_lfaddr := $0000;
+	fileio_lfbank := $0004;
+	fileio_lfnamesize := 7;
+   fileio_lfname := "NTI.BIN";
+   fileio::LoadFile();
+   
+   // Load Map Data to attic $0800 0000
+	fileio_lfaddr := $0000;
+	fileio_lfbank := $0800;
+	fileio_lfnamesize := 10;
+   fileio_lfname := "BIGMAP.BIN";
+   fileio::LoadFile();   
+end;
+
+procedure InitGraphics();
+var count : byte;
+begin
+	mega65_SetColorMode();
+	mega65_SetRowSize(SCREEN_COLS);
+	mega65_relocateScreen($05,$0000);
+
+	// set number of rows
+	ASM("
+		lda #26
+		sta $D07b
+	");
+	// Init Palette
+	asm("
+		ldx #$ff
+	palloop:
+		lda $4000,x
+		sta $D100,x
+		lda $4100,x
+		sta $d200,x
+		lda $4200,x
+		sta $d300,x
+		dex
+		bne palloop
+		
+		lda #$00
+		sta $D020
+		sta $D021
+		
+		lda #80
+		sta $d05c
+		lda #%00111111
+		trb $d05d
+		lda #(>80) & %00111111
+		tsb $d05d
+		
+		lda #<96
+		sta $d048
+		lda #%00001111
+		trb $d049
+		lda #(>96) & %00001111
+		tsb $d049
+		
+		lda #<496
+		sta $d04a
+		lda #%00001111
+		trb $d04b
+		lda #(>496) & %00001111
+		tsb $d04b
+	");
+	// Generate Address Table for Map
+	for count := 0 to MAP_HEIGHT do
+	begin	
+		MapRowOffset[count] := $0000 + MAP_WIDTH*2*count;
+	end;
+end;
+
+var 
+	const DELAYTIME:integer = 1;
+	MapStartX : integer = 0;
+	MapStartY : integer = 0;
+	FineScrollX : integer;
+	FineScrollY : integer;
+	xcount : byte = 0;
+	ycount : byte = 0;
+	delaynum : integer = DELAYTIME;
+	hdirection : byte = 0;	// 0 left, 1 right
+	vdirection : byte = 0;	// 0 down, 1 up
+	
+procedure DrawMap();
+var l : byte;
+	yst : byte;
+begin
+	// Copy Map Data from $0800 0000 to Screen Mem $5 0000
+
+	for l := 0 to NUM_ROWS do
+	begin
+		yst := lo(MapStartY) + l;
+		DMA_lcopy($80,$00,MapRowOffset[yst]+MapStartX,$00,$05,l*mega65::LogicalRowSize,mega65::LogicalRowSize);
+		DMA_lcopy($80,$00,MapRowOffset[yst]+MAP_ATTRIB_START+MapStartX,$ff,$08,l*mega65::LogicalRowSize,mega65::LogicalRowSize);
+	end;
+end;
+
+
+procedure ScrollMap();
+begin
+//	dec(delaynum);
+	//if delaynum = 0 then
+	begin
+		if hdirection = 0 then 
+		begin
+			xcount := xcount + 1;
+			if (xcount>15)then
+			begin
+				xcount := 0;
+				// copy shifted Mapdata
+				FineScrollX := LEFT_BORDER;
+				
+				Poke(^$D04c,0,lo(FineScrollX));
+				Poke(^$D04d,0,hi(FineScrollX));
+				
+				MapStartX := MapStartX + 2;
+				if MapStartX > (Map_Width*2-40) then
+				begin
+					hdirection := 1;
+					xcount:=1;
+					
+				end;
+			end else
+			begin
+				FineScrollX := LEFT_BORDER - xcount*2;
+				
+				Poke(^$D04c,0,lo(FineScrollX));
+				Poke(^$D04d,0,hi(FineScrollX));
+			end;
+		end	else
+		begin
+			xcount := xcount - 1;
+			if (xcount=0)then
+			begin
+				xcount := 16;
+				// copy shifted Mapdata
+				FineScrollX := LEFT_BORDER - xcount*2;
+				
+				Poke(^$D04c,0,lo(FineScrollX));
+				Poke(^$D04d,0,hi(FineScrollX));
+				
+				MapStartX := MapStartX - 2;
+				if MapStartX <= 0 then
+				begin
+					MapStartX := 0;
+					hdirection := 0;
+				end;
+			end else
+			begin
+				FineScrollX := LEFT_BORDER - xcount*2;
+				
+				Poke(^$D04c,0,lo(FineScrollX));
+				Poke(^$D04d,0,hi(FineScrollX));
+			end;
+		end;
+		// Vertical Scrolling
+		if vdirection = 0 then		// scroll down
+		begin
+			ycount := ycount + 1;
+			if ycount > 7 then
+			begin
+				ycount := 0;
+				FineScrollY := TOP_BORDER - ycount*2;
+				Poke(^$D04e,0,lo(FineScrollY));
+				Poke(^$D04f,0,hi(FineScrollY));
+				// increase Y Tile Raster
+				MapStartY := MapStartY + 1;
+				if MapStartY > MAP_HEIGHT - NUM_ROWS then
+				begin
+					vdirection := 1;	// go up
+					ycount := 1;
+				end;
+			end;
+			FineScrollY := TOP_BORDER - ycount*2;
+			Poke(^$D04e,0,lo(FineScrollY));
+			Poke(^$D0ef,0,hi(FineScrollY));
+		
+		end else					// scroll up
+		begin
+			ycount := ycount - 1;
+			if ycount = 0 then
+			begin
+				ycount := 8;
+				FineScrollY := TOP_BORDER - ycount*2;
+				Poke(^$D04e,0,lo(FineScrollY));
+				Poke(^$D04f,0,hi(FineScrollY));
+				// increase Y Tile Raster
+				MapStartY := MapStartY - 1;
+				if MapStartY <= 0 then
+				begin
+					MapStartY := 0;
+					vdirection := 0;	// go up
+				end;
+			end;
+			FineScrollY := TOP_BORDER - ycount*2;
+			Poke(^$D04e,0,lo(FineScrollY));
+			Poke(^$D0ef,0,hi(FineScrollY));	
+			
+		end;
+	//	delaynum := DELAYTIME;
+		DrawMap();
+	end;
+end;
+
+
+begin
+	LoadAssets();	
+	InitGraphics();
+	DrawMap();
+	// Mainloop
+	while(1) do
+	begin
+		// wait for vsync
+		asm("
+		 vsyncloop:
+			lda $d053
+			and #$07
+			cmp #>(BOTTOM_BORDER)
+			bne vsyncloop
+			lda #<(BOTTOM_BORDER)
+			cmp $D052
+			bne vsyncloop
+			cmp $D052
+			bne vsyncloop
+		");
+		
+		inc(^$D020);
+		ScrollMap();
+		dec(^$D020);
+	end;
+end.

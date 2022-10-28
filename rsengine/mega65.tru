@@ -1,0 +1,312 @@
+unit mega65;
+
+@use "rsengine/DMA"
+@use "rsengine/str"
+
+var RowSize : byte = 40;
+	LogicalRowSize : integer;
+	screenMB: byte;
+	screenB : byte;
+	screenaddr : integer;
+	s1:^byte;
+
+@donotremove RowSize
+@donotremove LogicalRowSize
+
+procedure io_enable();
+begin
+	POKE(^$d02f,0,$47);
+	POKE(^$D02f,0,$53);
+	POKE(^$0,0,65);
+end;
+
+procedure init();
+begin
+	asm("
+		sei 
+		lda #$35
+		sta $01
+		
+		; enable 40 mhz
+		lda #$41
+		sta $00
+		
+		; disable C65 ROM
+		lda #$70
+		sta $d640
+		eom
+		; unmap C65 rom
+		lda #%11111000
+		trb $d030
+		
+		; disable CIA interrupts
+		lda $7f
+		sta $dc0d
+		sta $dd0d
+		
+		; disable IRQ interrupts
+		lda #$00
+		sta $d01a
+		cli
+		
+		
+	");
+end;
+
+procedure enableM65IO();
+begin
+	asm("
+		;lda #$00
+		;tax
+		;tay
+		;taz
+		;map
+		;eom
+		lda #$47
+		sta $d02f
+		lda #$53
+		sta $d02f
+	");
+end;
+
+procedure SetColorMode();
+begin
+	asm("
+		sei
+    	lda #$35
+	    sta $01
+    
+		lda #$41
+		sta $00 ;40 Mhz mode
+	
+		lda #$00
+		tax 
+		tay 
+		taz 
+		map
+		eom
+
+		lda #$47	; Enable VIC IV
+		sta $d02f
+		lda #$53
+		sta $d02f
+		
+		; disable c65 rom
+		lda #$70
+		sta $d640
+		eom
+		; unmap c65 rom
+		lda #%11111000
+		trb $d030
+		
+		; Disable CIA interrupts
+	    lda #$7f
+    	sta $dc0d
+	    sta $dd0d
+
+    	; Disable IRQ raster interrupts
+	    ; because C65 uses raster interrupts in the ROM
+    	lda #$00
+	    sta $d01a
+    
+
+	    ; Change VIC2 stuff here to save having to disable hot registers
+	    lda #%00000111
+	    trb $d016
+
+    	; Now setup VIC4
+	    lda #%10100000		; Clear bit7=40 column, bit5=disable extended attribute
+    	trb $d031
+
+	    lda #%00000101		; Set bit2=FCM for chars >$ff,  bit0=16 bit char indices
+    	sta $d054
+
+    	cli
+	");
+	
+end;
+procedure setFCM();
+begin
+	asm("
+	 sei
+      lda #$00
+      tax
+      tay
+      taz
+      map
+      eom
+ sei 
+		lda #$35
+		sta $01
+		
+        lda #65
+        sta $0
+        
+        lda #$47
+        sta $d02f
+        lda #$53
+        sta $d02f
+		; enable 40 mhz
+		lda #$41
+		sta $00
+		
+		; disable C65 ROM
+		lda #$70
+		sta $d640
+		eom
+		; unmap C65 rom
+		lda #%11111000
+		trb $d030
+		
+		; disable CIA interrupts
+		lda $7f
+		sta $dc0d
+		sta $dd0d
+		
+		; disable IRQ interrupts
+		lda #$00
+		sta $d01a
+		
+		lda #$00
+        sta $D618
+        
+;      lda #$35
+;      sta $01
+
+      ; enable 40Mhz
+;      lda #$41
+;      sta $00
+
+      ; enable VIC4
+
+;      lda #$47
+;      sta $d02f
+;      lda #$53
+;      sta $d02f
+
+      ; disable CIA interrupts
+;      lda #$7f
+;      sta $dc0d
+;      sta $dd0d
+
+      ; disable C65 Rom
+ ;     lda #$70
+ ;     sta $d640
+ ;     eom
+
+      ; disable IRQ raster
+ ;     lda #$00
+ ;     sta $d01a
+
+      ; Unmap C65 Roms
+;      lda #%11111000
+;      trb $d030
+
+
+      ;Change VIC2 stuff here to save having to disable hot registers
+      lda #%00000111
+	  trb $d016
+	
+	   cli
+
+    ;  lda #$80		;Clear bit7=40 column, bit5=disable extended attribute
+    ;  trb $d031
+     ; lda #$08
+     ; tsb $d031
+  
+  ;    lda #$00    
+   ;   sta $d05b
+      
+
+
+      ; 40 cols
+     
+
+      ;Setup up FCM 
+      lda #%01000101  ;Enable 16 bit char numbers (bit0) and 
+	  sta $d054       ;full color for chars>$ff (bit2)
+      
+      
+	  lda #%01001000
+      sta $d031
+	  
+;	//  lda #$80    ;Enable Rewrite double buffering
+;	//  trb $d051
+      
+      lda #$40    
+      tsb $d051
+      
+      lda #$00
+      sta $d020
+      sta $d021
+      
+      lda #$00
+      sta $D610
+
+;	
+	");
+	
+/*	asm("
+		lda #%00000111
+		trb $d016
+		
+		lda #%10100000
+		trb $d031
+		
+		lda #%00000101
+		sta $d054
+		
+		lda #$00
+		sta $d020
+		sta $d021
+		
+	");	*/
+end;
+
+procedure relocateScreen(b:byte;addr:integer);
+var p : pointer;
+begin
+	screenB := b;
+	screenaddr := addr;
+	POKE(^$D061,0,addr>>8);
+	POKE(^$D060,0,addr&$FF);
+	POKE(^$D062,0,b);
+end;
+
+procedure SetRowSize(newRowSize:byte);
+begin
+	RowSize:=newRowSize;
+	LogicalRowSize := RowSize*2;
+	POKE(^$D05E,0,RowSize);
+	POKE(^$D059,0,(LogicalRowSize>>8));
+	POKE(^$D058,0,(LogicalRowSize&$FF));
+end;
+
+procedure SetLogicalRowSize(newLRowSize : byte);
+begin
+	LogicalRowSize := newLRowSize;
+	POKE(^$D059,0,(LogicalRowSize>>8));
+	POKE(^$D058,0,(LogicalRowSize&$FF));
+end;
+
+procedure printCharFCM(ch : byte;color:byte;x,y:integer);
+var a:integer;
+begin
+	a := $0000 + x*2 + y*LogicalRowSize;
+//	DMA::lpoke($00,$05,a,ch);
+	DMA::poke16($0005,a,ch);
+	a := $0001 + x*2 + y*LogicalRowSize;
+//	DMA::lpoke($ff,$08,a,color);
+	DMA::poke16($0ff8,a,color);
+end;
+
+procedure printStringFCM(s1 : global ^byte;color1:byte;x1,y1:integer);
+var i:byte;
+begin
+	for i:=0 to str::strlen(s1) do
+	begin
+		printCharFCM(s1[i]-64,color1,x1+i,y1);
+	end;
+end;
+
+end.

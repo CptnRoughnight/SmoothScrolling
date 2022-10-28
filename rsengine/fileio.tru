@@ -1,0 +1,56 @@
+unit fileio;
+
+var 
+	@donotremove lfbank
+	@donotremove lfaddr
+	@donotremove lfname
+	//@donotremove lfnamesize
+	lfbank : integer;
+	lfaddr : integer;
+	lfname : cstring = "ABCDEFG.BIN";
+	lfnamesize : byte;
+	
+procedure LoadFile();
+begin
+	ASM("
+		sei
+        
+        lda fileio_lfnamesize
+        ldx #<fileio_lfname
+        ldy #>fileio_lfname
+		jsr $FFBD
+				
+		lda fileio_lfbank	; bank for loading
+		ldx #$00	; bank for filename
+		jsr $ff6b
+		
+		lda #$00
+		ldx #$08
+		ldy #$00
+		jsr $FFBA
+		
+		; set 32bit load address
+		
+		lda fileio_lfbank+1
+		sta $b0
+		lda fileio_lfbank
+		sta $af
+
+		lda #$00
+		ldx fileio_lfaddr
+		ldy fileio_lfaddr+1
+		jsr $FFD5
+		bcs derror
+		jmp goexit
+	derror:
+		inc $d020
+		jmp derror
+		
+	goexit:
+		cli
+        rts
+
+	");	
+end;
+
+end.
